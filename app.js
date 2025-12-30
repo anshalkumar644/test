@@ -79,30 +79,33 @@ const usePeer = (userPhone, onData, onConn, onCall, onError) => {
     return { myPeerId, connect, send, call, status };
 };
 
-// --- Login Component ---
+// --- Login Component (Uses Relative Server Path) ---
 const LoginScreen = ({ onLogin }) => {
     const [step, setStep] = useState(1);
     const [phone, setPhone] = useState("");
     const [otp, setOtp] = useState("");
     const [loading, setLoading] = useState(false);
+    const [errorMsg, setErrorMsg] = useState("");
 
-    // Generic API helper
+    // API Helper: Uses relative path (/api/...) automatically
     const apiRequest = async (endpoint, body) => {
         try {
-            const res = await fetch(`http://localhost:5000/api/${endpoint}`, {
+            const res = await fetch(`/api/${endpoint}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
             });
             return await res.json();
         } catch(e) {
-            return { success: false, message: "Server connection failed. Start server.js" };
+            return { success: false, message: "Connection Error. Is server running?" };
         }
     };
 
     const handleSendOTP = async () => {
-        if(phone.length < 10) return alert("Enter valid mobile number");
+        if(phone.length < 10) return setErrorMsg("Invalid phone number");
         setLoading(true);
+        setErrorMsg("");
+        
         const data = await apiRequest('login', { phone });
         setLoading(false);
         
@@ -110,19 +113,21 @@ const LoginScreen = ({ onLogin }) => {
             setStep(2);
             alert("OTP Sent! Check the Black Server Console screen.");
         } else {
-            alert(data.message);
+            setErrorMsg(data.message);
         }
     };
 
     const handleVerify = async () => {
         setLoading(true);
+        setErrorMsg("");
+        
         const data = await apiRequest('verify', { phone, otp });
         setLoading(false);
 
         if(data.success) {
             onLogin(data.user);
         } else {
-            alert(data.message);
+            setErrorMsg(data.message);
         }
     };
 
@@ -133,7 +138,9 @@ const LoginScreen = ({ onLogin }) => {
                     <div className="w-16 h-16 bg-teal-600 rounded-full flex items-center justify-center text-3xl">🔒</div>
                 </div>
                 <h2 className="text-2xl font-bold text-center mb-2">Eind Login</h2>
-                <p className="text-gray-400 text-center text-sm mb-6">Your chats stay on this device.</p>
+                <p className="text-gray-400 text-center text-sm mb-6">Secure Persistent Login</p>
+
+                {errorMsg && <div className="bg-red-500/20 text-red-300 p-2 rounded text-sm text-center mb-4 border border-red-500">{errorMsg}</div>}
 
                 {step === 1 ? (
                     <>
@@ -195,9 +202,8 @@ const App = () => {
 
     // --- Actions ---
     const handleLogout = () => {
-        if(confirm("Logout? Your chats will remain on this browser.")) {
+        if(confirm("Logout? Your local chats will remain, but you need to login again.")) {
             setUser(null);
-            // We do NOT clear chats on logout to persist data
             window.location.reload(); 
         }
     };
@@ -307,7 +313,9 @@ const App = () => {
         }
     };
 
-    if (!user) return <LoginScreen onLogin={setUser} />;
+    if (!user) {
+        return <LoginScreen onLogin={setUser} />;
+    }
 
     return (
         <div className="flex h-full w-full bg-app-dark overflow-hidden font-sans text-gray-100 relative">
@@ -315,9 +323,8 @@ const App = () => {
             
             {incomingCall && <div className="fixed inset-0 bg-black/90 z-[70] flex items-center justify-center p-4"><div className="bg-app-panel p-6 rounded-2xl flex flex-col items-center w-full max-w-sm"><div className="text-4xl animate-bounce mb-4">📞</div><h2 className="text-xl mb-4 text-center">Incoming Call...</h2><div className="flex gap-8"><button onClick={()=>setIncomingCall(null)} className="bg-red-500 p-4 rounded-full"><Icon name="phone-slash" size={32} weight="fill"/></button><button onClick={answerCall} className="bg-green-500 p-4 rounded-full"><Icon name="phone" size={32} weight="fill"/></button></div></div></div>}
             {activeCall && <div className="fixed inset-0 bg-black z-[70] flex flex-col"><div className="flex-1 relative flex items-center justify-center">{remoteStream?<VideoPlayer stream={remoteStream} isLocal={false}/>:<div className="animate-pulse">Connecting...</div>}<div className="absolute bottom-4 right-4 w-28 h-40 bg-gray-800 rounded border border-gray-600"><VideoPlayer stream={localStream} isLocal={true}/></div></div><div className="h-20 flex items-center justify-center bg-gray-900 pb-safe"><button onClick={endCall} className="bg-red-600 p-4 rounded-full"><Icon name="phone-slash" size={32} weight="fill"/></button></div></div>}
-
-            {/* Add Friend Modal */}
-            {addFriendModal && <div className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4"><div className="bg-app-panel p-6 rounded-xl w-full max-w-sm relative"><button onClick={()=>setAddFriendModal(false)} className="absolute top-3 right-3"><Icon name="x" size={24}/></button><h3 className="text-lg font-bold mb-4">Add New Contact</h3><input value={friendPhone} onChange={e=>setFriendPhone(e.target.value)} placeholder="Enter Phone Number" className="w-full bg-gray-700 p-3 rounded mb-4 outline-none" type="tel"/><button onClick={handleAddFriend} className="w-full bg-teal-600 p-3 rounded font-bold hover:bg-teal-700">Add to Chat</button></div></div>}
+            
+            {addFriendModal && <div className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4"><div className="bg-app-panel p-6 rounded-xl w-full max-w-sm relative"><button onClick={()=>setAddFriendModal(false)} className="absolute top-3 right-3"><Icon name="x" size={24}/></button><h3 className="text-lg font-bold mb-4">Add New Contact</h3><input value={friendPhone} onChange={e=>setFriendPhone(e.target.value)} placeholder="Phone Number" className="w-full bg-gray-700 p-3 rounded mb-4 outline-none" type="tel"/><button onClick={handleAddFriend} className="w-full bg-teal-600 p-3 rounded font-bold hover:bg-teal-700">Add to Chat</button></div></div>}
 
             <div className={`${activeChat?'hidden md:flex':'flex'} w-full md:w-[400px] flex-col border-r border-gray-700 bg-app-dark h-full z-10`}>
                 <div className="h-16 bg-app-panel flex items-center justify-between px-4 shrink-0">
