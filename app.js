@@ -17,7 +17,6 @@ const solveMath = (expr) => {
     try {
         const sanitized = expr.replace(/[^0-9+\-*/().\s^%]/g, '');
         if (!sanitized || !/[0-9]/.test(sanitized)) return null;
-        // eslint-disable-next-line no-new-func
         return Function('"use strict";return (' + sanitized + ')')();
     } catch (e) { return null; }
 };
@@ -35,26 +34,39 @@ const VideoPlayer = ({ stream, isLocal }) => {
     return <video ref={videoRef} autoPlay playsInline className={`w-full h-full ${isLocal?'object-cover':'object-contain'}`} style={{ transform: isLocal?'scaleX(-1)':'' }} />;
 };
 
-// --- P2P Hook ---
-const usePeer = (onData, onConn, onCall, onError) => {
+// --- P2P Hook (Updated to use Phone Number as ID) ---
+const usePeer = (userPhone, onData, onConn, onCall, onError) => {
     const [myPeerId, setMyPeerId] = useState(null);
-    const [status, setStatus] = useState("Init...");
+    const [status, setStatus] = useState("Connecting...");
     const peerRef = useRef(null);
     const connRef = useRef({});
     const beatRef = useRef(null);
 
     useEffect(() => {
-        const id = "eind-" + Math.floor(Math.random()*100000);
-        const p = new Peer(id, { debug: 1, config: { iceServers: [{ url: 'stun:stun.l.google.com:19302' }] } });
+        if (!userPhone) return;
+
+        // Use Phone Number as Peer ID (Sanitized)
+        const cleanId = "eind-" + userPhone.replace(/\D/g, ''); 
+        
+        const p = new Peer(cleanId, { debug: 1, config: { iceServers: [{ url: 'stun:stun.l.google.com:19302' }] } });
+        
         p.on('open', (id) => { setMyPeerId(id); setStatus("Online"); });
         p.on('connection', (c) => setupConn(c));
         p.on('call', (c) => onCall && onCall(c));
-        p.on('error', (e) => { setStatus("Error"); if(onError) onError(e.type); });
+        p.on('error', (e) => { 
+            if(e.type === 'unavailable-id') {
+                setStatus("ID Taken (Check Tabs)");
+            } else {
+                setStatus("Error"); 
+            }
+            if(onError) onError(e.type); 
+        });
         p.on('disconnected', () => { setStatus("Reconnecting..."); p.reconnect(); });
+
         peerRef.current = p;
         beatRef.current = setInterval(() => Object.values(connRef.current).forEach(c => c.open && c.send({type:'ping'})), 2000);
         return () => { p.destroy(); clearInterval(beatRef.current); };
-    }, []);
+    }, [userPhone]);
 
     const setupConn = (c) => {
         c.on('open', () => { connRef.current[c.peer] = c; if(onConn) onConn(c); });
@@ -70,13 +82,105 @@ const usePeer = (onData, onConn, onCall, onError) => {
     return { myPeerId, connect, send, call, status };
 };
 
+// --- Login Component ---
+const LoginScreen = ({ onLogin }) => {
+    const [step, setStep] = useState(1); // 1: Phone, 2: OTP
+    const [phone, setPhone] = useState("");
+    const [otp, setOtp] = useState("");
+    const [loading, setLoading] = useState(false);
+
+    const handleSendOTP = async () => {
+        if(phone.length < 10) return alert("Please enter valid number");
+        setLoading(true);
+        try {
+            const res = await fetch('http://localhost:5000/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone })
+            });
+            const data = await res.json();
+            if(data.success) {
+                setStep(2);
+                alert("OTP Sent! Check Server Console.");
+            } else {
+                alert(data.message);
+            }
+        } catch(e) {
+            alert("Server Error. Make sure server.js is running.");
+        }
+        setLoading(false);
+    };
+
+    const handleVerify = async () => {
+        setLoading(true);
+        try {
+            const res = await fetch('http://localhost:5000/api/verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone, otp })
+            });
+            const data = await res.json();
+            if(data.success) {
+                onLogin(data.user);
+            } else {
+                alert(data.message);
+            }
+        } catch(e) { alert("Verification Failed"); }
+        setLoading(false);
+    };
+
+    return (
+        <div className="flex h-screen w-full items-center justify-center bg-gray-900 text-white">
+            <div className="bg-gray-800 p-8 rounded-xl shadow-2xl w-full max-w-sm border border-gray-700">
+                <div className="flex justify-center mb-6">
+                    <div className="w-16 h-16 bg-teal-600 rounded-full flex items-center justify-center text-3xl">🔒</div>
+                </div>
+                <h2 className="text-2xl font-bold text-center mb-2">Welcome to Eind</h2>
+                <p className="text-gray-400 text-center text-sm mb-6">Secure P2P Login</p>
+
+                {step === 1 ? (
+                    <>
+                        <input 
+                            value={phone} 
+                            onChange={(e) => setPhone(e.target.value)} 
+                            placeholder="Mobile Number (e.g. 9876543210)" 
+                            className="w-full bg-gray-700 border border-gray-600 p-3 rounded mb-4 focus:border-teal-500 outline-none"
+                            type="tel"
+                        />
+                        <button onClick={handleSendOTP} disabled={loading} className="w-full bg-teal-600 hover:bg-teal-700 py-3 rounded font-bold transition">
+                            {loading ? "Sending..." : "Get OTP"}
+                        </button>
+                    </>
+                ) : (
+                    <>
+                        <p className="text-center text-sm mb-4 text-teal-400">OTP sent to {phone}</p>
+                        <input 
+                            value={otp} 
+                            onChange={(e) => setOtp(e.target.value)} 
+                            placeholder="Enter 4-digit OTP" 
+                            className="w-full bg-gray-700 border border-gray-600 p-3 rounded mb-4 focus:border-teal-500 outline-none text-center tracking-widest text-xl"
+                            type="number"
+                        />
+                        <button onClick={handleVerify} disabled={loading} className="w-full bg-teal-600 hover:bg-teal-700 py-3 rounded font-bold transition">
+                            {loading ? "Verifying..." : "Verify & Login"}
+                        </button>
+                        <button onClick={()=>setStep(1)} className="w-full mt-2 text-gray-500 text-sm hover:text-white">Change Number</button>
+                    </>
+                )}
+                <p className="text-xs text-center text-gray-600 mt-6">Server must be running on localhost:5000</p>
+            </div>
+        </div>
+    );
+};
+
 // --- Main App ---
 const App = () => {
+    const [user, setUser] = useState(null); // Auth State
+    
     const [activeChat, setActiveChat] = useState(null);
     const [showQR, setShowQR] = useState(false);
     const [notification, setNotification] = useState(null);
     
-    // Call States
     const [incomingCall, setIncomingCall] = useState(null);
     const [activeCall, setActiveCall] = useState(null);
     const [localStream, setLocalStream] = useState(null);
@@ -93,14 +197,14 @@ const App = () => {
             const ex = prev.find(c => c.id === id);
             const msg = { id: Date.now(), type: d.type||'text', content: d.content||d.text, sender: 'them', time: formatTime(new Date()) };
             if(ex) return [{...ex, messages:[...ex.messages, msg], lastMsg: d.type==='text'?d.text:'Media', time:formatTime(new Date()), unread: activeChat===id?0:ex.unread+1}, ...prev.filter(c=>c.id!==id)];
-            return [{id, name:`User ${id.split('-')[1]}`, avatar:'👤', lastMsg: d.type==='text'?d.text:'Media', time:formatTime(new Date()), unread:1, isP2P:true, messages:[msg]}, ...prev];
+            return [{id, name:`User ${id.replace('eind-','')}`, avatar:'👤', lastMsg: d.type==='text'?d.text:'Media', time:formatTime(new Date()), unread:1, isP2P:true, messages:[msg]}, ...prev];
         });
     };
 
     const onConn = (c) => {
         notify(`Connected: ${c.peer}`);
         setShowQR(false);
-        setChats(prev => prev.find(ch=>ch.id===c.peer) ? prev : [{id:c.peer, name:`User ${c.peer.split('-')[1]}`, avatar:'🔗', lastMsg:'Connected', time:formatTime(new Date()), unread:0, isP2P:true, messages:[]}, ...prev]);
+        setChats(prev => prev.find(ch=>ch.id===c.peer) ? prev : [{id:c.peer, name:`User ${c.peer.replace('eind-','')}`, avatar:'🔗', lastMsg:'Connected', time:formatTime(new Date()), unread:0, isP2P:true, messages:[]}, ...prev]);
     };
 
     const onIncomingCall = (c) => setIncomingCall(c);
@@ -133,7 +237,8 @@ const App = () => {
         setActiveCall(null); setIncomingCall(null); setLocalStream(null); setRemoteStream(null);
     };
 
-    const peerControls = usePeer(onData, onConn, onIncomingCall, notify);
+    // Initialize Peer only after Login
+    const peerControls = usePeer(user ? user.phone : null, onData, onConn, onIncomingCall, notify);
 
     const handleSend = async (txt, type='text', file=null) => {
         if(!activeChat) return;
@@ -154,9 +259,8 @@ const App = () => {
                 const lower = txt.toLowerCase();
                 const mathResult = solveMath(txt);
                 if (mathResult !== null) response = `Answer: ${mathResult}`;
-                else if (lower.includes('who') || lower.includes('about')) response = "I am Eind Assistant, created by Anshal.";
-                else if (lower.includes('hi') || lower.includes('hello')) response = "Namaste! 🙏";
-                else response = "I can solve math (e.g., '5 * 5') or tell you about myself.";
+                else if (lower.includes('who')) response = "I am Eind Assistant.";
+                else response = "I can solve math.";
 
                 setChats(prev => prev.map(c => {
                     if(c.id === 'bot') {
@@ -168,6 +272,11 @@ const App = () => {
             }, 600);
         }
     };
+
+    // Show Login Screen if not logged in
+    if (!user) {
+        return <LoginScreen onLogin={setUser} />;
+    }
 
     return (
         <div className="flex h-full w-full bg-app-dark overflow-hidden font-sans text-gray-100 relative">
@@ -197,8 +306,6 @@ const ChatWindow = ({ chat, onBack, onSend, onCall }) => {
     const [txt, setTxt] = useState("");
     const endRef = useRef(null);
     const fileRef = useRef(null);
-    
-    // Auto scroll
     useEffect(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), [chat.messages]);
 
     const sendFile = async (e) => {
