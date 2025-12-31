@@ -5,13 +5,11 @@ const Icon = ({ name, size = 24, className = "", onClick, ...props }) => <i onCl
 const formatTime = (d) => new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 const fileToBase64 = (f) => new Promise((r) => { const reader = new FileReader(); reader.onload = () => r(reader.result); reader.readAsDataURL(f); });
 
-// --- Bot Logic ---
 const getBotReply = (text) => {
     const lower = text.toLowerCase();
-    if(lower.includes('hi') || lower.includes('hello')) return "Namaste! Main Eind Bot hu. Main connect karne mein madad kar sakta hu.";
-    if(lower.includes('id') || lower.includes('connect')) return "Apna QR Code scan karein ya apni ID share karein connect karne ke liye.";
-    if(lower.includes('created') || lower.includes('maker')) return "Mujhe Anshal Kumar ne banaya hai. Made in India 🇮🇳.";
-    return "Main abhi seekh raha hu. Aap video call ya chat try karein!";
+    if(lower.includes('hi') || lower.includes('hello')) return "Namaste! Main Eind Bot hu.";
+    if(lower.includes('connect') || lower.includes('problem')) return "Agar connect nahi ho raha to upar 'Refresh' 🔄 button dabayein.";
+    return "Main aapki help ke liye yahan hu. Aap video call ya chat kar sakte hain.";
 };
 
 // --- Video Player ---
@@ -27,40 +25,34 @@ const VideoPlayer = ({ stream, isLocal }) => {
     return <video ref={videoRef} autoPlay playsInline className={`w-full h-full ${isLocal?'object-cover':'object-contain'}`} style={{ transform: isLocal?'scaleX(-1)':'' }} />;
 };
 
-// --- FIXED PEER HOOK (Connectivity Fix) ---
+// --- Improved P2P Hook (Auto Reconnect & Multi-STUN) ---
 const usePeer = (user, onData, onCall, onError) => {
     const [myPeerId, setMyPeerId] = useState(null);
-    const [status, setStatus] = useState("Connecting...");
+    const [status, setStatus] = useState("Initializing...");
     const peerRef = useRef(null);
     const connRef = useRef({});
 
     useEffect(() => {
         if (!user) return;
-        
-        // ID Generation Logic
         const cleanId = "eind-" + user.phone.replace(/\D/g, '');
-        console.log("Initializing Peer with ID:", cleanId);
-
-        // STUN Servers added for better connectivity
+        
+        // FIX: Added multiple STUN servers for better connectivity across networks
         const p = new Peer(cleanId, { 
-            debug: 2,
+            debug: 1,
             config: {
                 iceServers: [
                     { url: 'stun:stun.l.google.com:19302' },
                     { url: 'stun:stun1.l.google.com:19302' },
-                    { url: 'stun:stun2.l.google.com:19302' }
+                    { url: 'stun:stun2.l.google.com:19302' },
+                    { url: 'stun:stun3.l.google.com:19302' },
+                    { url: 'stun:stun4.l.google.com:19302' }
                 ]
             }
         });
         
-        p.on('open', (id) => {
-            console.log("My Peer ID is:", id);
-            setMyPeerId(id);
-            setStatus("Online");
-        });
+        p.on('open', (id) => { setMyPeerId(id); setStatus("Online"); });
         
         p.on('connection', (c) => {
-            console.log("Incoming connection from:", c.peer);
             c.on('open', () => {
                 connRef.current[c.peer] = c;
                 // Handshake sends user info immediately
@@ -70,56 +62,51 @@ const usePeer = (user, onData, onCall, onError) => {
                 if(d.type === 'handshake') onData(d, c.peer);
                 else onData(d, c.peer);
             });
+            c.on('close', () => { delete connRef.current[c.peer]; });
         });
         
         p.on('call', (c) => onCall && onCall(c));
-        
         p.on('error', (e) => {
-            console.error("Peer Error:", e);
-            if(e.type === 'unavailable-id') setStatus("ID Busy (Refresh)");
-            else if(e.type === 'network') setStatus("Network Error");
-            else setStatus("Error: " + e.type);
-            if(onError) onError(e.type);
-        });
-
-        p.on('disconnected', () => {
-            setStatus("Reconnecting...");
-            p.reconnect();
+            if(e.type === 'peer-unavailable') { /* Ignore noisy errors */ }
+            else if (onError) onError(e.type);
         });
         
-        peerRef.current = p;
+        p.on('disconnected', () => { setStatus("Reconnecting..."); p.reconnect(); });
 
-        // Keep Alive Ping
+        peerRef.current = p;
+        
+        // Heartbeat to keep connection alive
         const interval = setInterval(() => {
             if(p && !p.destroyed) {
                 Object.values(connRef.current).forEach(c => {
                     if(c.open) c.send({type:'ping'});
                 });
             }
-        }, 5000);
+        }, 3000);
 
-        return () => { 
-            p.destroy(); 
-            clearInterval(interval); 
-        };
+        return () => { p.destroy(); clearInterval(interval); };
     }, [user]);
 
     const connect = (id) => { 
-        if(peerRef.current && id) {
+        if(peerRef.current) {
+            // Close existing to force fresh connection
+            if(connRef.current[id]) { connRef.current[id].close(); delete connRef.current[id]; }
+            
             const conn = peerRef.current.connect(id, { reliable: true });
             conn.on('open', () => {
                 connRef.current[id] = conn;
                 conn.send({ type: 'handshake', user: { name: user.name, avatar: user.avatar, phone: user.phone } });
             });
             conn.on('data', (d) => onData(d, id));
-            conn.on('error', (e) => console.log("Connection failed", e));
         }
     };
 
     const send = (id, msg) => { 
         const c = connRef.current[id]; 
-        if(c && c.open) { c.send(msg); return true; } 
-        console.warn("Connection not open for", id);
+        if(c && c.open) { 
+            c.send(msg); 
+            return true; 
+        } 
         return false; 
     };
     
@@ -143,7 +130,7 @@ const LoginScreen = ({ onLogin }) => {
     };
 
     const handleSendOTP = () => {
-        if(phone.length < 10 || !name) return alert("Naam aur Sahi Number daalein.");
+        if(phone.length < 10 || !name) return alert("Naam aur Number zaruri hai.");
         const otp = Math.floor(1000 + Math.random() * 9000);
         setGeneratedOtp(otp);
         setStep(2);
@@ -153,7 +140,7 @@ const LoginScreen = ({ onLogin }) => {
         if(parseInt(inputOtp) === generatedOtp) {
             onLogin({ phone, name, avatar });
         } else {
-            alert("Galat OTP! (OTP screen par dekhein)");
+            alert("Galat OTP!");
         }
     };
 
@@ -161,7 +148,7 @@ const LoginScreen = ({ onLogin }) => {
         <div className="flex h-screen items-center justify-center bg-gray-900 text-white p-4">
             <div className="bg-gray-800 p-6 rounded-xl w-full max-w-sm border border-gray-700 relative">
                 <h2 className="text-xl font-bold text-center mb-1">Eind Login</h2>
-                <p className="text-center text-xs text-gray-400 mb-6">Created by Anshal Kumar 🇮🇳</p>
+                <p className="text-center text-xs text-gray-400 mb-6">Made in India 🇮🇳</p>
                 
                 {step === 1 ? (
                     <>
@@ -178,12 +165,12 @@ const LoginScreen = ({ onLogin }) => {
                 ) : (
                     <div className="animate-pulse">
                         <div className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-900 p-3 rounded mb-4 shadow-md">
-                            <p className="font-bold text-xs uppercase">Eind OTP Message</p>
-                            <p className="text-sm">Aapka Code hai: <span className="font-bold text-lg tracking-widest">{generatedOtp}</span></p>
+                            <p className="font-bold text-xs uppercase">Message</p>
+                            <p className="text-sm">Aapka OTP hai: <span className="font-bold text-lg tracking-widest">{generatedOtp}</span></p>
                         </div>
                         <input value={inputOtp} onChange={e=>setInputOtp(e.target.value)} placeholder="OTP Yahan Daalein" className="w-full bg-gray-700 p-3 rounded mb-4 outline-none text-center text-xl tracking-widest" type="number" />
                         <button onClick={handleVerify} className="w-full bg-teal-600 p-3 rounded font-bold hover:bg-teal-700 transition">Verify & Login</button>
-                        <button onClick={()=>setStep(1)} className="w-full mt-2 text-gray-400 text-sm">Wapas</button>
+                        <button onClick={()=>setStep(1)} className="w-full mt-2 text-gray-400 text-sm">Cancel</button>
                     </div>
                 )}
             </div>
@@ -193,13 +180,14 @@ const LoginScreen = ({ onLogin }) => {
 
 // --- Main App ---
 const App = () => {
-    const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('eind_user_v15')) || null);
-    const [chats, setChats] = useState(() => JSON.parse(localStorage.getItem('eind_chats_v15')) || [
+    const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('eind_user_v16')) || null);
+    const [chats, setChats] = useState(() => JSON.parse(localStorage.getItem('eind_chats_v16')) || [
         { id: 'bot', name: 'Eind Bot', avatar: '🤖', lastMsg: 'Namaste! Help chahiye?', time: Date.now(), unread: 0, messages: [], type: 'dm' }
     ]);
     const [activeChat, setActiveChat] = useState(null);
     const [showQR, setShowQR] = useState(false);
     
+    // New Modal States
     const [modalMode, setModalMode] = useState(null);
     const [inputVal, setInputVal] = useState(""); 
     const [groupMembers, setGroupMembers] = useState("");
@@ -209,8 +197,8 @@ const App = () => {
     const [localStream, setLocalStream] = useState(null);
     const [remoteStream, setRemoteStream] = useState(null);
 
-    useEffect(() => { if(user) localStorage.setItem('eind_user_v15', JSON.stringify(user)); }, [user]);
-    useEffect(() => { localStorage.setItem('eind_chats_v15', JSON.stringify(chats)); }, [chats]);
+    useEffect(() => { if(user) localStorage.setItem('eind_user_v16', JSON.stringify(user)); }, [user]);
+    useEffect(() => { localStorage.setItem('eind_chats_v16', JSON.stringify(chats)); }, [chats]);
 
     const onData = (d, senderId) => {
         if (d.type === 'handshake') {
@@ -218,7 +206,7 @@ const App = () => {
                 if (prev.find(c => c.id === senderId)) return prev;
                 return [{
                     id: senderId, name: d.user.name, avatar: d.user.avatar || '👤', phone: d.user.phone,
-                    lastMsg: 'New Connection!', time: Date.now(), unread: 0, isP2P: true, type: 'dm', messages: []
+                    lastMsg: 'Connected!', time: Date.now(), unread: 0, isP2P: true, type: 'dm', messages: []
                 }, ...prev];
             });
             return;
@@ -251,9 +239,22 @@ const App = () => {
 
     const peerControls = usePeer(user, onData, onIncomingCall, (e)=>console.log(e));
 
+    // Fix: Reconnect function
+    const forceReconnect = (chatId) => {
+        if(!chatId || chatId === 'bot') return;
+        peerControls.connect(chatId);
+        // Also connect to group members if group
+        const chat = chats.find(c => c.id === chatId);
+        if(chat && chat.type === 'group') {
+            chat.members.forEach(m => peerControls.connect("eind-"+m.replace(/\D/g, '')));
+        }
+        alert("Reconnecting... 2 second wait karein.");
+    };
+
     const handleSend = (txt, type='text', content=null) => {
         if(!activeChat) return;
         
+        // Bot Logic
         if(activeChat === 'bot') {
             const newMsg = { id: Date.now(), type: 'text', content: txt, sender: 'me', time: Date.now() };
             setChats(prev => prev.map(c => c.id === 'bot' ? {...c, messages:[...c.messages, newMsg], lastMsg: txt, time: Date.now()} : c));
@@ -269,18 +270,27 @@ const App = () => {
         const finalContent = content || txt;
         const newMsg = { id: Date.now(), type, content: finalContent, sender: 'me', time: Date.now() };
         
+        // Optimistic UI Update
         setChats(prev => prev.map(c => c.id === activeChat ? {...c, messages:[...c.messages, newMsg], lastMsg: type==='text'?txt:'Media', time: Date.now()} : c));
         
         const payload = { type, content: finalContent, text: txt, senderName: user.name, groupId: currentChat.type==='group'?currentChat.id:null };
 
+        // Send Logic with Retry
         if(currentChat.type === 'dm') {
-            peerControls.send(activeChat, payload);
+            const sent = peerControls.send(activeChat, payload);
+            if(!sent) {
+                console.log("Send failed, attempting reconnect...");
+                peerControls.connect(activeChat); // Auto-reconnect try
+                setTimeout(() => peerControls.send(activeChat, payload), 1500); // Retry after 1.5s
+            }
         } else {
             currentChat.members.forEach(phone => {
                 const pid = "eind-" + phone.replace(/\D/g, '');
                 if(pid !== peerControls.myPeerId) {
-                    peerControls.connect(pid); 
-                    setTimeout(() => peerControls.send(pid, payload), 500);
+                    if(!peerControls.send(pid, payload)) {
+                        peerControls.connect(pid);
+                        setTimeout(() => peerControls.send(pid, payload), 1500);
+                    }
                 }
             });
         }
@@ -323,29 +333,25 @@ const App = () => {
 
             <div className={`${activeChat?'hidden md:flex':'flex'} w-full md:w-[400px] flex-col border-r border-gray-700 bg-app-dark h-full z-10`}>
                 <div className="h-16 bg-app-panel flex items-center justify-between px-4 shrink-0">
-                    <div className="flex items-center gap-2 overflow-hidden">
+                    <div className="flex items-center gap-2">
                         {user.avatar ? <img src={user.avatar} className="w-10 h-10 rounded-full object-cover"/> : <Icon name="user-circle" size={40}/>}
-                        <div className="flex flex-col min-w-0">
-                            <span className="font-bold truncate text-sm">{user.name}</span>
-                            {/* STATUS INDICATOR ADDED HERE */}
-                            <div className="flex items-center gap-1">
-                                <span className={`w-2 h-2 rounded-full ${peerControls.status==='Online'?'bg-green-500':'bg-red-500'}`}></span>
-                                <span className="text-[10px] text-gray-400 truncate">{peerControls.status === 'Online' ? peerControls.myPeerId : peerControls.status}</span>
-                            </div>
+                        <div>
+                            <span className="font-bold truncate max-w-[100px] block">{user.name}</span>
+                            <span className={`text-[10px] ${peerControls.status==='Online'?'text-green-400':'text-red-400'}`}>{peerControls.status}</span>
                         </div>
                     </div>
                     <div className="flex gap-3 text-gray-400">
                         <button onClick={()=>setModalMode('group')}><Icon name="users-three" size={24}/></button>
                         <button onClick={()=>setModalMode('friend')}><Icon name="user-plus" size={24}/></button>
                         <button onClick={()=>setShowQR(true)}><Icon name="qr-code" size={24}/></button>
-                        <button onClick={()=>{if(confirm('Logout?')) {localStorage.removeItem('eind_user_v14'); setUser(null);}}}><Icon name="sign-out" size={24}/></button>
+                        <button onClick={()=>{if(confirm('Logout?')) {localStorage.removeItem('eind_user_v15'); setUser(null);}}}><Icon name="sign-out" size={24}/></button>
                     </div>
                 </div>
                 <div className="flex-1 overflow-y-auto">{chats.map(c=><div key={c.id} onClick={()=>setActiveChat(c.id)} className="flex items-center p-3 hover:bg-app-panel cursor-pointer"><div className="w-12 h-12 rounded-full bg-gray-600 mr-3 overflow-hidden shrink-0">{c.avatar?.length>50?<img src={c.avatar} className="w-full h-full object-cover"/>:<div className="flex items-center justify-center h-full text-2xl">{c.avatar}</div>}</div><div className="flex-1 border-b border-gray-800 pb-3 min-w-0"><div className="flex justify-between"><span className="font-bold truncate">{c.name}</span><span className="text-xs text-gray-500">{formatTime(c.time)}</span></div><div className="text-sm text-gray-400 truncate">{c.lastMsg}</div></div></div>)}</div>
                 <div className="p-2 text-center text-[10px] text-gray-600 border-t border-gray-800 shrink-0 pb-safe">Created by Anshal Kumar • Made in India 🇮🇳</div>
             </div>
 
-            {activeChat ? <ChatWindow chat={chats.find(c=>c.id===activeChat)} onBack={()=>setActiveChat(null)} onSend={handleSend} onCall={startCall} /> : 
+            {activeChat ? <ChatWindow chat={chats.find(c=>c.id===activeChat)} onBack={()=>setActiveChat(null)} onSend={handleSend} onCall={startCall} onReconnect={()=>forceReconnect(activeChat)} /> : 
             <div className="hidden md:flex flex-1 flex-col items-center justify-center bg-app-panel border-b-4 border-app-teal">
                 <div className="text-center">
                     <h1 className="text-6xl font-light">Eind</h1>
@@ -356,12 +362,12 @@ const App = () => {
                 </div>
             </div>}
 
-            {showQR && <QRModal id={peerControls.myPeerId || "Connecting..."} onClose={()=>setShowQR(false)} onScan={peerControls.connect} />}
+            {showQR && <QRModal id={"eind-"+user.phone} onClose={()=>setShowQR(false)} onScan={peerControls.connect} />}
         </div>
     );
 };
 
-const ChatWindow = ({ chat, onBack, onSend, onCall }) => {
+const ChatWindow = ({ chat, onBack, onSend, onCall, onReconnect }) => {
     const [txt, setTxt] = useState("");
     const [isRec, setIsRec] = useState(false);
     const endRef = useRef(null);
@@ -399,6 +405,8 @@ const ChatWindow = ({ chat, onBack, onSend, onCall }) => {
                     <div className="flex flex-col"><span className="font-bold truncate">{chat.name}</span><span className="text-xs text-gray-400">{chat.type==='group'?'Group':chat.phone}</span></div>
                 </div>
                 <div className="flex gap-4 text-app-teal">
+                    {/* RECONNECT BUTTON */}
+                    {chat.isP2P && <button onClick={onReconnect} title="Force Reconnect"><Icon name="arrows-clockwise" size={24} weight="bold"/></button>}
                     {chat.isP2P && <><button onClick={()=>onCall(chat.id, 'video')}><Icon name="video-camera" size={24} weight="fill"/></button><button onClick={()=>onCall(chat.id, 'audio')}><Icon name="phone" size={24} weight="fill"/></button></>}
                 </div>
             </div>
