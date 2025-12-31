@@ -13,13 +13,27 @@
 }
 
 /* App Theme Colors */
-.bg-app-dark { background-color: #111b21; }
-.bg-app-panel { background-color: #202c33; }
-.bg-app-teal { background-color: #00a884; }
-.bg-message-out { background-color: #005c4b; }
-.bg-message-in { background-color: #202c33; }
+.bg-app-dark {
+    background-color: #111b21;
+}
 
-/* Chat Background */
+.bg-app-panel {
+    background-color: #202c33;
+}
+
+.bg-app-teal {
+    background-color: #00a884;
+}
+
+.bg-message-out {
+    background-color: #005c4b;
+}
+
+.bg-message-in {
+    background-color: #202c33;
+}
+
+/* Chat Background Pattern */
 .chat-bg {
     background-image: url("https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png");
     opacity: 0.06;
@@ -29,13 +43,22 @@
     z-index: 0;
 }
 
-/* Video Fit */
+/* Video Fit Logic */
 #reader video {
     object-fit: cover;
     border-radius: 8px;
 }
 
-/* Fix for iPhone bottom bar */
+/* iPhone Safe Area Fix */
 .pb-safe {
     padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Fade In Animation */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+    animation: fadeIn 0.3s ease-out;
 }
